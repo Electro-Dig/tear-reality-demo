@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Tear Down Reality Demo</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="stage-shell">
+      <canvas id="webgl-stage" aria-hidden="true"></canvas>
+      <canvas id="tear-stage" aria-label="Interactive canvas: drag across the scene to tear it open"></canvas>
+      <div class="hand-panel">
+        <p id="hand-status" class="hand-status">Hand tracking off</p>
+        <video id="hand-video" class="hand-video" autoplay playsinline muted></video>
+      </div>
+      <div class="hud">
+        <div class="hud-copy">
+          <p class="kicker">Prototype 01</p>
+          <h1>Tear down reality</h1>
+        </div>
+        <div class="actions">
+          <input id="layer-upload" class="visually-hidden" type="file" accept="image/*" multiple>
+          <button id="layer-upload-button" type="button">Images</button>
+          <button id="tear-style-toggle" type="button">Tear Shards</button>
+          <button id="ui-toggle" type="button" aria-pressed="true">UI On</button>
+          <button id="hand-toggle" type="button">Hand</button>
+          <button id="reset" type="button">Reset</button>
+        </div>
+      </div>
+      <p class="hint">Drag across the room. Pinch with thumb and index finger to tear by hand.</p>
+    </main>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
