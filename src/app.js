@@ -15,9 +15,15 @@ import { shouldAdvanceLayer } from './layerAdvance.js';
 import {
   DEFAULT_TEAR_STYLE,
   detachedPieceOpacity,
+  grabRadiusForSource,
   resolveTearStyle,
+  shouldCommitTearMask,
+  shouldFreezeBrokenEdges,
+  shouldRenderDetachedPiece,
+  shouldRenderTearMask,
   TEAR_STYLES,
   tearWidthForMotion,
+  twoHandTearSegments,
 } from './tearFeedback.js';
 import { clampPoint } from './tearGeometry.js';
 import { WebglClothRenderer } from './webglClothRenderer.js';
@@ -35,6 +41,8 @@ const handStatus = document.querySelector('#hand-status');
 const handVideo = document.querySelector('#hand-video');
 const context = canvas.getContext('2d', { alpha: true });
 const renderer = new WebglClothRenderer(sceneCanvas);
+const HAND_POINT_SMOOTHING = 0.68;
+const TWO_HAND_CENTER_SMOOTHING = 0.62;
 
 const state = {
   width: 0,
@@ -63,6 +71,8 @@ const state = {
   topLayer: document.createElement('canvas'),
   bottomLayer: document.createElement('canvas'),
   compositeLayer: document.createElement('canvas'),
+  committedMaskLayer: document.createElement('canvas'),
+  hasCommittedTearMask: false,
   customImages: [],
   customImageUrls: [],
   uiVisible: true,
@@ -83,6 +93,8 @@ const state = {
     twoHand: {
       previousDistance: 0,
       previousCenter: null,
+      previousLeftPoint: null,
+      previousRightPoint: null,
       startDistance: 0,
     },
   },
@@ -97,6 +109,8 @@ function resize() {
   configureCanvas(state.topLayer, state.width, state.height);
   configureCanvas(state.bottomLayer, state.width, state.height);
   configureCanvas(state.compositeLayer, state.width, state.height);
+  configureCanvas(state.committedMaskLayer, state.width, state.height);
+  state.hasCommittedTearMask = false;
   state.layers = createSceneLayers();
   state.layerIndex = Math.min(state.layerIndex, state.layers.length - 2);
   if (!state.cloth) {
@@ -104,7 +118,7 @@ function resize() {
       width: state.width,
       height: state.height,
       ...meshResolution(state.width),
-      irregularity: 0.22,
+      irregularity: 0.3,
     });
   } else {
     resizeClothMesh(state.cloth, state.width, state.height);
@@ -217,7 +231,10 @@ function draw() {
       if (!state.dragging) spawnScraps(state.pointer, Math.min(2, newlyBroken));
     }
     const brokenEdges = brokenEdgeSet(state.cloth);
-    const visibleBrokenEdges = state.dragging && state.dragStartBrokenEdges
+    const visibleBrokenEdges = shouldFreezeBrokenEdges({
+      renderStyle: state.activeRenderStyle,
+      isDragging: state.dragging,
+    }) && state.dragStartBrokenEdges
       ? state.dragStartBrokenEdges
       : brokenEdges;
     renderer.render({
@@ -267,7 +284,13 @@ function startTear(point, source = 'pointer') {
   state.lastScrapPoint = null;
   dismissReleasedDetachedPieces();
   startTearPath(point, source);
-  if (state.cloth) beginGrab(state.cloth, point, Math.min(178, Math.max(98, state.width * 0.088)));
+  if (state.cloth) {
+    beginGrab(state.cloth, point, grabRadiusForSource({
+      source,
+      renderStyle: state.activeRenderStyle,
+      viewportWidth: state.width,
+    }));
+  }
   requestDraw();
 }
 
@@ -322,6 +345,10 @@ function endTear(source = 'pointer') {
   }
   if (state.activeTearPath) {
     state.activeTearPath.releasedAt = now;
+    if (shouldCommitTearMask(state.activeTearPath)) {
+      commitTearMask(state.activeTearPath);
+      state.activeTearPath.maskCommitted = true;
+    }
   }
   state.dragging = false;
   state.dragSource = null;
@@ -330,6 +357,7 @@ function endTear(source = 'pointer') {
   state.dragStartBrokenCount = 0;
   state.dragDistance = 0;
   state.lastTearSegment = null;
+  state.tearPaths = state.tearPaths.filter((path) => !path.maskCommitted);
   state.activeTearPath = null;
   if (state.cloth) releaseGrab(state.cloth);
   state.settleUntil = now + 1400;
@@ -390,6 +418,25 @@ function clearTearPaths() {
   state.tearPaths = [];
   state.tornPieces = [];
   state.activeTearPath = null;
+  clearCommittedTearMask();
+}
+
+function commitTearMask(path) {
+  const target = state.committedMaskLayer.getContext('2d');
+  target.save();
+  target.globalCompositeOperation = 'source-over';
+  target.fillStyle = '#000';
+  drawTornPathMasks(target, [path]);
+  target.restore();
+  state.hasCommittedTearMask = true;
+  renderer.invalidateTexture(state.compositeLayer);
+}
+
+function clearCommittedTearMask() {
+  const target = state.committedMaskLayer.getContext('2d');
+  target.clearRect(0, 0, state.width, state.height);
+  state.hasCommittedTearMask = false;
+  renderer.invalidateTexture(state.compositeLayer);
 }
 
 function dismissReleasedDetachedPieces() {
@@ -399,8 +446,10 @@ function dismissReleasedDetachedPieces() {
 }
 
 function shouldUseMaskedRender() {
-  return state.activeRenderStyle !== 'shards'
-    || state.tearPaths.some((path) => path.style && path.style !== 'shards');
+  return state.hasCommittedTearMask || state.tearPaths.some((path) => shouldRenderTearMask(path, {
+    activePath: state.activeTearPath,
+    isDragging: state.dragging,
+  }));
 }
 
 function prepareMaskedCurrentLayer(texture) {
@@ -411,14 +460,23 @@ function prepareMaskedCurrentLayer(texture) {
   target.drawImage(texture, 0, 0, state.width, state.height);
   target.globalCompositeOperation = 'destination-out';
   target.fillStyle = '#000';
-  drawTornPathMasks(target, state.tearPaths.filter((path) => path.style !== 'shards'));
+  if (state.hasCommittedTearMask) {
+    target.drawImage(state.committedMaskLayer, 0, 0, state.width, state.height);
+  }
+  drawTornPathMasks(target, state.tearPaths.filter((path) => shouldRenderTearMask(path, {
+    activePath: state.activeTearPath,
+    isDragging: state.dragging,
+  })));
   target.globalCompositeOperation = 'source-over';
   renderer.invalidateTexture(state.compositeLayer);
   return state.compositeLayer;
 }
 
 function drawTornPieces(ctx, texture, now) {
-  const visiblePaths = state.tearPaths.filter((path) => path.style === 'sheet' || path.style === 'strip');
+  const visiblePaths = state.tearPaths.filter((path) => shouldRenderDetachedPiece(path, {
+    activePath: state.activeTearPath,
+    isDragging: state.dragging,
+  }));
   for (const path of visiblePaths) {
     const alpha = detachedPieceOpacity(path, now, state.activeTearPath, { isDragging: state.dragging });
     if (alpha <= 0) continue;
@@ -1317,6 +1375,8 @@ function stopHandTracking() {
   state.hand.hands = [];
   state.hand.lastSeenAt = 0;
   state.hand.twoHand.previousCenter = null;
+  state.hand.twoHand.previousLeftPoint = null;
+  state.hand.twoHand.previousRightPoint = null;
   state.hand.twoHand.previousDistance = 0;
   state.hand.twoHand.startDistance = 0;
   handVideo.classList.remove('visible');
@@ -1350,11 +1410,11 @@ function handleHandFrame(frame) {
     return;
   }
 
-  const canvasHands = hands.map(canvasHand);
+  const canvasHands = hands.map(canvasHand).sort((a, b) => a.point.x - b.point.x);
   const primary = canvasHands[0];
   state.hand.hands = canvasHands;
   state.hand.landmarks = primary.landmarks;
-  state.hand.point = smoothPoint(state.hand.point, primary.point, 0.42);
+  state.hand.point = smoothPoint(state.hand.point, primary.point, HAND_POINT_SMOOTHING);
   state.hand.visible = true;
   state.hand.confidence = Math.max(...hands.map((hand) => hand.confidence));
   state.hand.lastSeenAt = now;
@@ -1387,7 +1447,7 @@ function handleHandFrame(frame) {
     state.hand.point = pinchHand.point;
     startTear(pinchHand.point, 'hand');
   } else if (pinchHand) {
-    state.hand.point = smoothPoint(state.hand.point, pinchHand.point, 0.42);
+    state.hand.point = smoothPoint(state.hand.point, pinchHand.point, HAND_POINT_SMOOTHING);
     moveTear(state.hand.point, 'hand');
   } else if (state.hand.pinching) {
     state.hand.pinching = false;
@@ -1430,47 +1490,82 @@ function startTwoHandTear(left, right) {
   state.lastScrapPoint = null;
   state.hand.twoHand.previousCenter = center;
   state.hand.twoHand.previousDistance = distance(left.point, right.point);
+  state.hand.twoHand.previousLeftPoint = left.point;
+  state.hand.twoHand.previousRightPoint = right.point;
   state.hand.twoHand.startDistance = state.hand.twoHand.previousDistance;
   dismissReleasedDetachedPieces();
   startTearPath(center, 'two-hand');
   updateTwoHandPath(left, right, 0);
-  if (state.cloth) beginGrab(state.cloth, center, Math.min(260, Math.max(140, state.hand.twoHand.previousDistance * 0.55)));
+  if (state.cloth) {
+    beginGrab(state.cloth, center, grabRadiusForSource({
+      source: 'two-hand',
+      renderStyle: state.activeRenderStyle,
+      viewportWidth: state.width,
+      handSpan: state.hand.twoHand.previousDistance,
+    }));
+  }
   requestDraw();
 }
 
 function moveTwoHandTear(left, right) {
   if (!state.dragging || state.dragSource !== 'two-hand') return;
-  const center = midpoint(left.point, right.point);
-  const previousCenter = state.hand.twoHand.previousCenter || center;
+  const rawCenter = midpoint(left.point, right.point);
+  const previousCenter = state.hand.twoHand.previousCenter || rawCenter;
+  const center = smoothPoint(previousCenter, rawCenter, TWO_HAND_CENTER_SMOOTHING);
   const currentDistance = distance(left.point, right.point);
-  const distanceDelta = Math.max(0, currentDistance - state.hand.twoHand.previousDistance);
+  const previousDistance = state.hand.twoHand.previousDistance || currentDistance;
+  const distanceDelta = Math.max(0, currentDistance - previousDistance);
   const centerMove = distance(previousCenter, center);
-  const segmentLength = Math.max(centerMove, distanceDelta);
+  const segments = twoHandTearSegments({
+    previousLeft: state.hand.twoHand.previousLeftPoint,
+    previousRight: state.hand.twoHand.previousRightPoint,
+    left: left.point,
+    right: right.point,
+    minMove: minTearSegmentLength('hand'),
+  });
+  const segmentLength = Math.max(centerMove, distanceDelta * 0.35, ...segments.map((segment) => distance(segment.from, segment.to)));
   state.pointer = center;
   state.previousPointer = center;
   state.dragDistance += segmentLength;
-  state.lastTearSegment = { from: left.point, to: right.point };
-  state.activeRenderStyle = 'sheet';
+  state.lastTearSegment = strongestSegment(segments);
+  state.activeRenderStyle = resolveCurrentTearStyle('two-hand', segmentLength, state.dragDistance);
 
   let newlyBroken = 0;
   if (state.cloth) {
     moveGrab(state.cloth, center);
-    const radius = Math.min(168, Math.max(58, currentDistance * 0.22 + distanceDelta * 0.75));
-    newlyBroken = stressClothMesh(
-      state.cloth,
-      left.point,
-      right.point,
-      radius,
-      1.08,
-      { minSegmentLength: 8 },
-    );
+    const radius = Math.min(96, Math.max(30, currentDistance * 0.055 + distanceDelta * 0.35));
+    for (const segment of segments) {
+      newlyBroken += stressClothMesh(
+        state.cloth,
+        segment.from,
+        segment.to,
+        radius,
+        0.82,
+        { minSegmentLength: minTearSegmentLength('hand') },
+      );
+    }
     if (newlyBroken > 0) state.settleUntil = performance.now() + 1400;
   }
 
   updateTwoHandPath(left, right, newlyBroken);
   state.hand.twoHand.previousCenter = center;
   state.hand.twoHand.previousDistance = currentDistance;
+  state.hand.twoHand.previousLeftPoint = left.point;
+  state.hand.twoHand.previousRightPoint = right.point;
   requestDraw();
+}
+
+function strongestSegment(segments) {
+  let strongest = null;
+  let longest = 0;
+  for (const segment of segments) {
+    const length = distance(segment.from, segment.to);
+    if (length > longest) {
+      strongest = segment;
+      longest = length;
+    }
+  }
+  return strongest;
 }
 
 function updateTwoHandPath(left, right, newlyBroken) {
@@ -1478,7 +1573,7 @@ function updateTwoHandPath(left, right, newlyBroken) {
   const path = state.activeTearPath;
   const span = distance(left.point, right.point);
   path.source = 'two-hand';
-  path.style = 'sheet';
+  path.style = resolveCurrentTearStyle('two-hand', span, state.dragDistance);
   path.totalDistance = Math.max(path.totalDistance || 0, state.dragDistance);
   path.lastVector = { x: right.point.x - left.point.x, y: right.point.y - left.point.y };
   const widthTarget = tearWidthForMotion({

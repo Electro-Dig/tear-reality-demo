@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_TEAR_STYLE,
   detachedPieceOpacity,
+  grabRadiusForSource,
   resolveTearStyle,
+  shouldFreezeBrokenEdges,
+  shouldCommitTearMask,
+  shouldRenderDetachedPiece,
+  shouldRenderTearMask,
   TEAR_STYLES,
   tearWidthForMotion,
+  twoHandTearSegments,
 } from '../src/tearFeedback.js';
 
 test('default tear style preserves the original shard interaction', () => {
@@ -32,6 +38,83 @@ test('resolveTearStyle keeps shard mode for small actions and escalates to strip
 
 test('resolveTearStyle honors an explicitly requested mode', () => {
   assert.equal(resolveTearStyle({ requestedStyle: 'shards', source: 'two-hand', dragDistance: 400, segmentLength: 260, viewportMin: 700 }), 'shards');
+});
+
+test('hand gesture sources keep the selected shard mode instead of forcing sheet rendering', () => {
+  assert.equal(resolveTearStyle({
+    requestedStyle: 'shards',
+    source: 'hand',
+    dragDistance: 500,
+    segmentLength: 120,
+    viewportMin: 700,
+  }), 'shards');
+  assert.equal(resolveTearStyle({
+    requestedStyle: 'shards',
+    source: 'two-hand',
+    dragDistance: 500,
+    segmentLength: 320,
+    viewportMin: 700,
+  }), 'shards');
+});
+
+test('shard rendering keeps live broken edges visible while dragging', () => {
+  assert.equal(shouldFreezeBrokenEdges({ renderStyle: 'shards', isDragging: true }), false);
+  assert.equal(shouldFreezeBrokenEdges({ renderStyle: 'sheet', isDragging: true }), true);
+  assert.equal(shouldFreezeBrokenEdges({ renderStyle: 'strip', isDragging: true }), true);
+  assert.equal(shouldFreezeBrokenEdges({ renderStyle: 'shards', isDragging: false }), false);
+});
+
+test('sheet and strip paths do not preview torn pieces or masks while actively dragging', () => {
+  const activeSheet = { style: 'sheet' };
+  const releasedSheet = { style: 'sheet', releasedAt: 1200 };
+  const activeShard = { style: 'shards' };
+
+  assert.equal(shouldRenderDetachedPiece(activeSheet, { activePath: activeSheet, isDragging: true }), false);
+  assert.equal(shouldRenderTearMask(activeSheet, { activePath: activeSheet, isDragging: true }), false);
+  assert.equal(shouldRenderDetachedPiece(releasedSheet, { activePath: activeSheet, isDragging: true }), false);
+  assert.equal(shouldRenderTearMask(releasedSheet, { activePath: activeSheet, isDragging: true }), true);
+  assert.equal(shouldRenderTearMask(activeShard, { activePath: activeShard, isDragging: true }), false);
+});
+
+test('non-shard tears commit to a permanent mask instead of rendering ghost pieces', () => {
+  const releasedSheet = { style: 'sheet', releasedAt: 1200, points: [{}, {}] };
+  const releasedStrip = { style: 'strip', releasedAt: 1200, points: [{}, {}] };
+  const releasedShard = { style: 'shards', releasedAt: 1200, points: [{}, {}] };
+
+  assert.equal(shouldCommitTearMask(releasedSheet), true);
+  assert.equal(shouldCommitTearMask(releasedStrip), true);
+  assert.equal(shouldCommitTearMask(releasedShard), false);
+  assert.equal(shouldRenderDetachedPiece(releasedSheet), false);
+  assert.equal(shouldRenderDetachedPiece(releasedStrip), false);
+});
+
+test('hand shard grabbing uses a smaller local radius than pointer or sheet gestures', () => {
+  const handShard = grabRadiusForSource({ source: 'hand', renderStyle: 'shards', viewportWidth: 1280 });
+  const pointerShard = grabRadiusForSource({ source: 'pointer', renderStyle: 'shards', viewportWidth: 1280 });
+  const handSheet = grabRadiusForSource({ source: 'hand', renderStyle: 'sheet', viewportWidth: 1280 });
+  const twoHandShard = grabRadiusForSource({ source: 'two-hand', renderStyle: 'shards', viewportWidth: 1280, handSpan: 620 });
+
+  assert.ok(handShard < pointerShard);
+  assert.ok(handShard < handSheet);
+  assert.ok(handShard <= 112);
+  assert.ok(twoHandShard < pointerShard);
+  assert.ok(twoHandShard <= 92);
+});
+
+test('two-hand tearing follows hand motion instead of the full span between hands', () => {
+  const previousLeft = { x: 160, y: 220 };
+  const previousRight = { x: 760, y: 220 };
+  const left = { x: 146, y: 230 };
+  const right = { x: 776, y: 228 };
+  const segments = twoHandTearSegments({ previousLeft, previousRight, left, right, minMove: 6 });
+
+  assert.equal(segments.length, 2);
+  for (const segment of segments) {
+    assert.ok(Math.hypot(segment.to.x - segment.from.x, segment.to.y - segment.from.y) < 24);
+  }
+
+  const still = twoHandTearSegments({ previousLeft: left, previousRight: right, left, right, minMove: 6 });
+  assert.equal(still.length, 0);
 });
 
 test('detachedPieceOpacity only keeps released pieces briefly visible', () => {

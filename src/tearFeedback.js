@@ -49,6 +49,63 @@ export function detachedPieceOpacity(path, now, activePath = null, options = {})
   return Math.max(0, 0.88 * (1 - easeOutCubic(age / lifetime)));
 }
 
+export function shouldRenderDetachedPiece(path, { activePath = null, isDragging = false } = {}) {
+  if (!path || path.detachedDismissed) return false;
+  if (isDragging || path === activePath || !path.releasedAt) return false;
+  return false;
+}
+
+export function shouldRenderTearMask(path, { activePath = null, isDragging = false } = {}) {
+  if (!path || path.style === 'shards') return false;
+  if (isDragging && path === activePath) return false;
+  return true;
+}
+
+export function shouldCommitTearMask(path) {
+  return Boolean(path && path.style !== 'shards' && path.points && path.points.length >= 2);
+}
+
+export function shouldFreezeBrokenEdges({ renderStyle = 'shards', isDragging = false } = {}) {
+  return Boolean(isDragging && renderStyle !== 'shards');
+}
+
+export function grabRadiusForSource({
+  source = 'pointer',
+  renderStyle = 'shards',
+  viewportWidth = 1280,
+  handSpan = 0,
+} = {}) {
+  if (source === 'two-hand') {
+    const base = renderStyle === 'shards'
+      ? Math.min(92, Math.max(42, handSpan * 0.12))
+      : Math.min(260, Math.max(140, handSpan * 0.55));
+    return Math.round(base);
+  }
+  if (source === 'hand' && renderStyle === 'shards') {
+    return Math.round(Math.min(112, Math.max(54, viewportWidth * 0.052)));
+  }
+  return Math.round(Math.min(178, Math.max(98, viewportWidth * 0.088)));
+}
+
+export function twoHandTearSegments({
+  previousLeft,
+  previousRight,
+  left,
+  right,
+  minMove = 8,
+} = {}) {
+  const segments = [];
+  appendMovedSegment(segments, previousLeft, left, minMove);
+  appendMovedSegment(segments, previousRight, right, minMove);
+  return segments;
+}
+
+function appendMovedSegment(segments, from, to, minMove) {
+  if (!from || !to) return;
+  if (Math.hypot(to.x - from.x, to.y - from.y) < minMove) return;
+  segments.push({ from, to });
+}
+
 function easeOutCubic(value) {
   const t = Math.max(0, Math.min(1, value));
   return 1 - (1 - t) ** 3;

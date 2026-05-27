@@ -8,9 +8,9 @@ export class HandTracker {
     this.running = false;
     this.lastVideoTime = -1;
     this.lastHands = [];
-    this.smoothing = 0.42;
+    this.smoothing = 0.68;
     this.lastDetectAt = 0;
-    this.minDetectInterval = 66;
+    this.minDetectInterval = 33;
   }
 
   async initialize() {
@@ -23,9 +23,9 @@ export class HandTracker {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: 'user',
-        width: { ideal: 640, max: 960 },
-        height: { ideal: 360, max: 540 },
-        frameRate: { ideal: 24, max: 24 },
+        width: { ideal: 640, max: 640 },
+        height: { ideal: 360, max: 360 },
+        frameRate: { ideal: 30, max: 30 },
       },
       audio: false,
     });
