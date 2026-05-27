@@ -242,7 +242,7 @@ function draw() {
       currentLayer: renderCurrentLayer,
       mesh: state.cloth,
       brokenEdges: visibleBrokenEdges,
-      ignoreBroken: maskedRender,
+      ignoreBroken: false,
     });
     maybeAdvanceLayer();
   }

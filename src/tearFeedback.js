@@ -57,8 +57,9 @@ export function shouldRenderDetachedPiece(path, { activePath = null, isDragging 
 
 export function shouldRenderTearMask(path, { activePath = null, isDragging = false } = {}) {
   if (!path || path.style === 'shards') return false;
-  if (isDragging && path === activePath) return false;
-  return true;
+  if (path.maskCommitted) return false;
+  if (path === activePath || isDragging) return false;
+  return Boolean(path.releasedAt);
 }
 
 export function shouldCommitTearMask(path) {

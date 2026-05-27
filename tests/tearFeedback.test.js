@@ -64,7 +64,7 @@ test('shard rendering keeps live broken edges visible while dragging', () => {
   assert.equal(shouldFreezeBrokenEdges({ renderStyle: 'shards', isDragging: false }), false);
 });
 
-test('sheet and strip paths do not preview torn pieces or masks while actively dragging', () => {
+test('sheet and strip paths do not preview torn pieces or path masks while actively dragging', () => {
   const activeSheet = { style: 'sheet' };
   const releasedSheet = { style: 'sheet', releasedAt: 1200 };
   const activeShard = { style: 'shards' };
@@ -72,8 +72,16 @@ test('sheet and strip paths do not preview torn pieces or masks while actively d
   assert.equal(shouldRenderDetachedPiece(activeSheet, { activePath: activeSheet, isDragging: true }), false);
   assert.equal(shouldRenderTearMask(activeSheet, { activePath: activeSheet, isDragging: true }), false);
   assert.equal(shouldRenderDetachedPiece(releasedSheet, { activePath: activeSheet, isDragging: true }), false);
-  assert.equal(shouldRenderTearMask(releasedSheet, { activePath: activeSheet, isDragging: true }), true);
+  assert.equal(shouldRenderTearMask(releasedSheet, { activePath: activeSheet, isDragging: true }), false);
   assert.equal(shouldRenderTearMask(activeShard, { activePath: activeShard, isDragging: true }), false);
+});
+
+test('released non-shard paths only render as fallback masks after dragging ends', () => {
+  const releasedSheet = { style: 'sheet', releasedAt: 1200, points: [{}, {}] };
+
+  assert.equal(shouldRenderTearMask(releasedSheet, { isDragging: false }), true);
+  assert.equal(shouldRenderTearMask({ ...releasedSheet, maskCommitted: true }, { isDragging: false }), false);
+  assert.equal(shouldRenderTearMask({ style: 'sheet', points: [{}, {}] }, { isDragging: false }), false);
 });
 
 test('non-shard tears commit to a permanent mask instead of rendering ghost pieces', () => {
