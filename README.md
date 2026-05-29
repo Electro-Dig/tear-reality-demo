@@ -194,4 +194,6 @@ node --test tests/*.test.js
 
 ## License
 
-当前仓库未声明开源协议。公开分享或复用前，请先补充明确的 license。
+MIT License. See [LICENSE](./LICENSE).
+
+你可以自由使用、修改、分发和二次创作本项目代码；请保留原始版权声明和协议文本。项目中的第三方依赖仍遵循各自的 license。
